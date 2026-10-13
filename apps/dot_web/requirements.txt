@@ -1,0 +1,5 @@
+streamlit==1.49.1
+openpyxl==3.1.5
+pmcx>=0.3.3
+# 0.7.2 requires OpenCL float atomics that fail on the tested Intel Iris Xe driver.
+pmcxcl==0.3.1

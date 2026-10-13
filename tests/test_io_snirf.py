@@ -1,8 +1,10 @@
 """Tests for cedalion.io.read_snirf."""
 
-import pytest
+import h5py
 import os
+import shutil
 from pathlib import Path
+import pytest
 import cedalion.io
 import cedalion.io.snirf
 import cedalion.data
@@ -79,3 +81,36 @@ def test_read_snirf_time_units():
 
     rec = cedalion.io.read_snirf(path, time_units="ms")[0]
     assert rec["amp"].time.units == cedalion.units.ms
+
+
+def test_read_snirf_unicode_subject_id(tmp_path):
+    source = cedalion.data.get_fingertapping_snirf_path()
+    path = tmp_path / "unicode_subject.snirf"
+    shutil.copyfile(source, path)
+    subject_id = "受试者001"
+
+    with h5py.File(path, "r+") as snirf_file:
+        metadata = snirf_file["nirs/metaDataTags"]
+        del metadata["SubjectID"]
+        metadata.create_dataset(
+            "SubjectID",
+            data=subject_id,
+            dtype=h5py.string_dtype(encoding="utf-8"),
+        )
+
+    recording = cedalion.io.read_snirf(path)[0]
+
+    assert recording.meta_data["SubjectID"] == subject_id
+
+
+def test_write_snirf_unicode_subject_id_roundtrip(tmp_path):
+    recording = cedalion.io.read_snirf(
+        cedalion.data.get_fingertapping_snirf_path()
+    )[0]
+    recording.meta_data["SubjectID"] = "受试者001"
+    path = tmp_path / "unicode_subject_roundtrip.snirf"
+
+    cedalion.io.snirf.write_snirf(path, recording)
+    reread = cedalion.io.read_snirf(path)[0]
+
+    assert reread.meta_data["SubjectID"] == "受试者001"

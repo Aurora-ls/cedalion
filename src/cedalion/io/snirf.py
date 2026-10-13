@@ -1,28 +1,80 @@
 """Contains functionality for handling .snirf files."""
 
 from __future__ import annotations
+
 import logging
 import re
 from collections import OrderedDict
+from contextlib import contextmanager
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
-from dataclasses import dataclass
+from threading import RLock
+from typing import Any, Iterator
 
+import h5py
 import numpy as np
 import pandas as pd
+import snirf.pysnirf2 as pysnirf2
 import xarray as xr
 from numpy.typing import ArrayLike
 from snirf import Snirf
 from snirf.pysnirf2 import DataElement, MeasurementList, NirsElement, Stim
 from strenum import StrEnum
-import h5py
 
 import cedalion.dataclasses as cdc
 from cedalion import cite, units
 from cedalion.typing import NDTimeSeries
 
 log = logging.getLogger("cedalion")
+
+_SNIRF_STRING_IO_LOCK = RLock()
+
+
+def _decode_snirf_string(value: Any) -> str:
+    """Decode an HDF5 SNIRF string as UTF-8, preserving ASCII compatibility."""
+
+    if isinstance(value, (bytes, np.bytes_)):
+        return bytes(value).decode("utf-8")
+    return str(value)
+
+
+def _read_snirf_string(dataset: h5py.Dataset) -> str:
+    """Read one UTF-8 string for the snirf 0.8 compatibility layer."""
+
+    if not isinstance(dataset, h5py.Dataset):
+        raise TypeError("'dataset' must be type h5py.Dataset")
+    value = dataset[0] if dataset.ndim > 0 else dataset[()]
+    return _decode_snirf_string(value)
+
+
+def _read_snirf_string_array(dataset: h5py.Dataset) -> np.ndarray:
+    """Read an array of UTF-8 strings for the snirf 0.8 compatibility layer."""
+
+    if not isinstance(dataset, h5py.Dataset):
+        raise TypeError("'dataset' must be type h5py.Dataset")
+    values = np.asarray(dataset[()])
+    decode = np.vectorize(_decode_snirf_string, otypes=[str])
+    return decode(values)
+
+
+@contextmanager
+def _unicode_snirf_strings() -> Iterator[None]:
+    """Temporarily make snirf 0.8 read and write HDF5 strings as UTF-8."""
+
+    with _SNIRF_STRING_IO_LOCK:
+        original_string_type = pysnirf2._varlen_str_type
+        original_read_string = pysnirf2._read_string
+        original_read_string_array = pysnirf2._read_string_array
+        pysnirf2._varlen_str_type = h5py.string_dtype(encoding="utf-8", length=None)
+        pysnirf2._read_string = _read_snirf_string
+        pysnirf2._read_string_array = _read_snirf_string_array
+        try:
+            yield
+        finally:
+            pysnirf2._varlen_str_type = original_string_type
+            pysnirf2._read_string = original_read_string
+            pysnirf2._read_string_array = original_read_string_array
 
 
 class DataType(Enum):
@@ -954,8 +1006,9 @@ def read_snirf(
     if isinstance(fname, Path):
         fname = str(fname)
 
-    with Snirf(fname, "r") as s:
-        return [read_nirs_element(ne, opts) for ne in s.nirs]
+    with _unicode_snirf_strings():
+        with Snirf(fname, "r") as s:
+            return [read_nirs_element(ne, opts) for ne in s.nirs]
 
 
 def denormalize_measurement_list(df_ml: pd.DataFrame, nirs_element: NirsElement):
@@ -1305,11 +1358,12 @@ def write_snirf(
     if isinstance(recordings, cdc.Recording):
         recordings = [recordings]
 
-    with Snirf(fname, "w") as fout:
-        for rec in recordings:
-            _write_recordings(fout, rec)
+    with _unicode_snirf_strings():
+        with Snirf(fname, "w") as fout:
+            for rec in recordings:
+                _write_recordings(fout, rec)
 
-        fout.save()
+            fout.save()
 
 
 def compress_snirf(

@@ -58,6 +58,7 @@ You can find the [source code on GitHub](https://github.com/ibs-lab/cedalion).
 rationale.md
 getting_started/index.md
 data_structures/index.md
+processing_qc_analysis_plan.md
 
 community/index.md
 ../LICENSE.md
